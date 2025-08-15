@@ -1,4 +1,5 @@
 import { createBuilder } from '@sgnl-ai/secevent';
+import { createPrivateKey } from 'crypto';
 
 /**
  * Transmits a Security Event Token (SET) to the specified endpoint
@@ -135,8 +136,16 @@ export default {
     }
 
     // Sign and get the JWT
-    builder.withSigningKey(ssfKey, ssfKeyId, signingMethod);
-    const jwt = await builder.sign();
+    // Parse the PEM key into a KeyObject
+    const privateKeyObject = createPrivateKey(ssfKey);
+    
+    const signingKey = {
+      key: privateKeyObject,
+      alg: signingMethod,
+      kid: ssfKeyId
+    };
+    const signResult = await builder.sign(signingKey);
+    const jwt = signResult.jwt;
 
     // Determine the destination URL
     // If address is provided, use it; otherwise fail as we need a destination
