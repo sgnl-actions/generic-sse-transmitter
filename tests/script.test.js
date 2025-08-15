@@ -1,130 +1,449 @@
+import { jest } from '@jest/globals';
 import script from '../src/script.mjs';
+import { createBuilder } from '@sgnl-ai/secevent';
 
-describe('Job Template Script', () => {
-  const mockContext = {
-    env: {
-      ENVIRONMENT: 'test'
-    },
-    secrets: {
-      API_KEY: 'test-api-key-123456'
-    },
-    outputs: {},
-    partial_results: {},
-    current_step: 'start'
-  };
+// Mock the @sgnl-ai/secevent module
+jest.mock('@sgnl-ai/secevent');
+
+// Mock fetch globally
+global.fetch = jest.fn();
+
+describe('Generic SSE Transmitter', () => {
+  let mockContext;
+  let mockBuilder;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    // Reset the mock builder for each test
+    mockBuilder = {
+      audience: jest.fn().mockReturnThis(),
+      eventType: jest.fn().mockReturnThis(),
+      issuedAt: jest.fn().mockReturnThis(),
+      subjectIdentifier: jest.fn().mockReturnThis(),
+      eventClaims: jest.fn().mockReturnThis(),
+      customClaim: jest.fn().mockReturnThis(),
+      build: jest.fn().mockResolvedValue('signed.jwt.token')
+    };
+
+    // Update the mock to return the new builder
+    createBuilder.mockReturnValue(mockBuilder);
+
+    mockContext = {
+      secrets: {
+        SSF_KEY: '-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----',
+        SSF_KEY_ID: 'test-key-id',
+        AUTH_TOKEN: 'Bearer test-token'
+      },
+      environment: {}
+    };
+
+    // Default fetch mock - successful response
+    global.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: jest.fn().mockResolvedValue('{"accepted": true}')
+    });
+  });
 
   describe('invoke handler', () => {
-    test('should execute successfully with minimal params', async () => {
+    it('should successfully transmit a SET with required parameters', async () => {
       const params = {
-        target: 'test-user@example.com',
-        action: 'create'
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {
+          initiating_entity: 'policy',
+          reason_user: 'Session terminated due to policy'
+        },
+        address: 'https://receiver.example.com/events'
       };
 
       const result = await script.invoke(params, mockContext);
 
+      expect(result).toEqual({
+        status: 'success',
+        statusCode: 200,
+        body: '{"accepted": true}'
+      });
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://receiver.example.com/events',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'Content-Type': 'application/secevent+jwt',
+            'Accept': 'application/json',
+            'Authorization': 'Bearer test-token'
+          }),
+          body: 'signed.jwt.token'
+        })
+      );
+    });
+
+    it('should handle complex subject format', async () => {
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: JSON.stringify({
+          user: { format: 'email', email: 'user@example.com' },
+          session: { format: 'opaque', id: 'session-123' }
+        }),
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      const result = await script.invoke(params, mockContext);
       expect(result.status).toBe('success');
-      expect(result.target).toBe('test-user@example.com');
-      expect(result.action).toBe('create');
-      expect(result.status).toBeDefined();
-      expect(result.processed_at).toBeDefined();
-      expect(result.options_processed).toBe(0);
     });
 
-    test('should handle dry run mode', async () => {
+    it('should append addressSuffix when provided', async () => {
       const params = {
-        target: 'test-user@example.com',
-        action: 'delete',
-        dry_run: true
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com',
+        addressSuffix: '/caep/events'
       };
 
-      const result = await script.invoke(params, mockContext);
+      await script.invoke(params, mockContext);
 
-      expect(result.status).toBe('dry_run_completed');
-      expect(result.target).toBe('test-user@example.com');
-      expect(result.action).toBe('delete');
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://receiver.example.com/caep/events',
+        expect.any(Object)
+      );
     });
 
-    test('should process options array', async () => {
+    it('should include custom claims when provided', async () => {
+
       const params = {
-        target: 'test-group',
-        action: 'update',
-        options: ['force', 'notify', 'audit']
-      };
-
-      const result = await script.invoke(params, mockContext);
-
-      expect(result.status).toBe('success');
-      expect(result.target).toBe('test-group');
-      expect(result.options_processed).toBe(3);
-    });
-
-    test('should handle context with previous job outputs', async () => {
-      const contextWithOutputs = {
-        ...mockContext,
-        outputs: {
-          'create-user': {
-            user_id: '12345',
-            created_at: '2024-01-15T10:30:00Z'
-          },
-          'assign-groups': {
-            groups_assigned: 3
-          }
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events',
+        customClaims: {
+          custom_field: 'value',
+          another_field: 123
         }
       };
 
+      await script.invoke(params, mockContext);
+
+      expect(mockBuilder.customClaim).toHaveBeenCalledWith('custom_field', 'value');
+      expect(mockBuilder.customClaim).toHaveBeenCalledWith('another_field', 123);
+    });
+
+    it('should use custom issuer when provided', async () => {
+
       const params = {
-        target: 'user-12345',
-        action: 'finalize'
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events',
+        issuer: 'https://custom.issuer.com/'
       };
 
-      const result = await script.invoke(params, contextWithOutputs);
+      await script.invoke(params, mockContext);
 
-      expect(result.status).toBe('success');
-      expect(result.target).toBe('user-12345');
-      expect(result.status).toBeDefined();
+      expect(createBuilder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issuer: 'https://custom.issuer.com/'
+        })
+      );
+    });
+
+    it('should use SubjectInEventClaims format when specified', async () => {
+
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events',
+        subjectFormat: 'SubjectInEventClaims'
+      };
+
+      await script.invoke(params, mockContext);
+
+      // When using SubjectInEventClaims, subject should be in event payload
+      expect(mockBuilder.eventClaims).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subject: JSON.parse(params.subject)
+        })
+      );
+      // And subjectIdentifier should not be called
+      expect(mockBuilder.subjectIdentifier).not.toHaveBeenCalled();
+    });
+
+    it('should fail when required type is missing', async () => {
+      const params = {
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      await expect(script.invoke(params, mockContext))
+        .rejects.toThrow('type is required');
+    });
+
+    it('should fail when required audience is missing', async () => {
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      await expect(script.invoke(params, mockContext))
+        .rejects.toThrow('audience is required');
+    });
+
+    it('should fail when required subject is missing', async () => {
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      await expect(script.invoke(params, mockContext))
+        .rejects.toThrow('subject is required');
+    });
+
+    it('should fail when SSF_KEY secret is missing', async () => {
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      delete mockContext.secrets.SSF_KEY;
+
+      await expect(script.invoke(params, mockContext))
+        .rejects.toThrow('SSF_KEY secret is required');
+    });
+
+    it('should fail when SSF_KEY_ID secret is missing', async () => {
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      delete mockContext.secrets.SSF_KEY_ID;
+
+      await expect(script.invoke(params, mockContext))
+        .rejects.toThrow('SSF_KEY_ID secret is required');
+    });
+
+    it('should fail when address is not provided', async () => {
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {}
+      };
+
+      await expect(script.invoke(params, mockContext))
+        .rejects.toThrow('address parameter or SET_RECEIVER_URL environment variable is required');
+    });
+
+    it('should fail with invalid subject JSON', async () => {
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: 'not-valid-json',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      await expect(script.invoke(params, mockContext))
+        .rejects.toThrow('Invalid subject JSON');
+    });
+
+    it('should throw on 429 rate limit error', async () => {
+      global.fetch.mockResolvedValue({
+        ok: false,
+        status: 429,
+        statusText: 'Too Many Requests',
+        text: jest.fn().mockResolvedValue('Rate limited')
+      });
+
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      await expect(script.invoke(params, mockContext))
+        .rejects.toThrow('SET transmission failed: 429 Too Many Requests');
+    });
+
+    it('should throw on 500 server error', async () => {
+      global.fetch.mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        text: jest.fn().mockResolvedValue('Server error')
+      });
+
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      await expect(script.invoke(params, mockContext))
+        .rejects.toThrow('SET transmission failed: 500 Internal Server Error');
+    });
+
+    it('should return failed status for 401 error', async () => {
+      global.fetch.mockResolvedValue({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        text: jest.fn().mockResolvedValue('Invalid token')
+      });
+
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      const result = await script.invoke(params, mockContext);
+
+      expect(result).toEqual({
+        status: 'failed',
+        statusCode: 401,
+        body: 'Invalid token',
+        error: 'SET transmission failed: 401 Unauthorized'
+      });
+    });
+
+    it('should not include auth header when AUTH_TOKEN is missing', async () => {
+      delete mockContext.secrets.AUTH_TOKEN;
+
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      await script.invoke(params, mockContext);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          headers: expect.not.objectContaining({
+            'Authorization': expect.any(String)
+          })
+        })
+      );
+    });
+
+    it('should add event_timestamp to eventPayload', async () => {
+
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {
+          initiating_entity: 'policy'
+        },
+        address: 'https://receiver.example.com/events'
+      };
+
+      await script.invoke(params, mockContext);
+
+      expect(mockBuilder.eventClaims).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initiating_entity: 'policy',
+          event_timestamp: expect.any(Number)
+        })
+      );
     });
   });
 
   describe('error handler', () => {
-    test('should throw error by default', async () => {
+    it('should request retry for 429 error', async () => {
       const params = {
-        target: 'test-user@example.com',
-        action: 'create',
-        error: {
-          message: 'Something went wrong',
-          code: 'ERROR_CODE'
-        }
+        error: new Error('SET transmission failed: 429 Too Many Requests')
       };
 
-      await expect(script.error(params, mockContext)).rejects.toThrow('Unable to recover from error: Something went wrong');
+      const result = await script.error(params, mockContext);
+      expect(result).toEqual({ status: 'retry_requested' });
+    });
+
+    it('should request retry for 502 error', async () => {
+      const params = {
+        error: new Error('SET transmission failed: 502 Bad Gateway')
+      };
+
+      const result = await script.error(params, mockContext);
+      expect(result).toEqual({ status: 'retry_requested' });
+    });
+
+    it('should request retry for 503 error', async () => {
+      const params = {
+        error: new Error('SET transmission failed: 503 Service Unavailable')
+      };
+
+      const result = await script.error(params, mockContext);
+      expect(result).toEqual({ status: 'retry_requested' });
+    });
+
+    it('should request retry for 504 error', async () => {
+      const params = {
+        error: new Error('SET transmission failed: 504 Gateway Timeout')
+      };
+
+      const result = await script.error(params, mockContext);
+      expect(result).toEqual({ status: 'retry_requested' });
+    });
+
+    it('should re-throw non-retryable errors', async () => {
+      const params = {
+        error: new Error('SET transmission failed: 401 Unauthorized')
+      };
+
+      await expect(script.error(params, mockContext))
+        .rejects.toThrow('SET transmission failed: 401 Unauthorized');
+    });
+
+    it('should re-throw generic errors', async () => {
+      const params = {
+        error: new Error('Some other error')
+      };
+
+      await expect(script.error(params, mockContext))
+        .rejects.toThrow('Some other error');
     });
   });
 
   describe('halt handler', () => {
-    test('should handle graceful shutdown', async () => {
-      const params = {
-        target: 'test-user@example.com',
-        reason: 'timeout'
-      };
-
+    it('should return halted status', async () => {
+      const params = {};
       const result = await script.halt(params, mockContext);
 
-      expect(result.status).toBe('halted');
-      expect(result.target).toBe('test-user@example.com');
-      expect(result.reason).toBe('timeout');
-      expect(result.halted_at).toBeDefined();
-    });
-
-    test('should handle halt without target', async () => {
-      const params = {
-        reason: 'system_shutdown'
-      };
-
-      const result = await script.halt(params, mockContext);
-
-      expect(result.status).toBe('halted');
-      expect(result.target).toBe('unknown');
-      expect(result.reason).toBe('system_shutdown');
+      expect(result).toEqual({ status: 'halted' });
     });
   });
 });

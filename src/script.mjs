@@ -1,100 +1,206 @@
+import { createBuilder } from '@sgnl-ai/secevent';
+
 /**
- * SGNL Job Template
- *
- * This template provides a starting point for implementing SGNL jobs.
- * Replace this implementation with your specific business logic.
+ * Transmits a Security Event Token (SET) to the specified endpoint
+ * @param {string} url - The destination URL
+ * @param {string} jwt - The signed JWT to transmit
+ * @param {string} [authToken] - Optional bearer token for authentication
+ * @returns {Promise<Response>} The HTTP response
  */
+async function transmitSET(url, jwt, authToken) {
+  const headers = {
+    'Accept': 'application/json',
+    'Content-Type': 'application/secevent+jwt',
+    'User-Agent': 'SGNL-Action-Framework/1.0'
+  };
+
+  if (authToken) {
+    headers['Authorization'] = authToken.startsWith('Bearer ')
+      ? authToken
+      : `Bearer ${authToken}`;
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: jwt
+  });
+
+  return response;
+}
+
+/**
+ * Parse subject JSON string into the appropriate format
+ * @param {string} subjectStr - JSON string representing the subject
+ * @returns {object} Parsed subject object
+ */
+function parseSubject(subjectStr) {
+  try {
+    return JSON.parse(subjectStr);
+  } catch (error) {
+    throw new Error(`Invalid subject JSON: ${error.message}`);
+  }
+}
+
+/**
+ * Build the destination URL from address and optional suffix
+ * @param {string} address - Base address
+ * @param {string} [suffix] - Optional suffix to append
+ * @returns {string} Complete URL
+ */
+function buildUrl(address, suffix) {
+  if (!suffix) {
+    return address;
+  }
+
+  const baseUrl = address.endsWith('/') ? address.slice(0, -1) : address;
+  const cleanSuffix = suffix.startsWith('/') ? suffix.slice(1) : suffix;
+
+  return `${baseUrl}/${cleanSuffix}`;
+}
 
 export default {
   /**
-   * Main execution handler - implement your job logic here
-   * @param {Object} params - Job input parameters
-   * @param {Object} context - Execution context with env, secrets, outputs
-   * @returns {Object} Job results
+   * Main handler for transmitting Security Event Tokens
    */
   invoke: async (params, context) => {
-    console.log('Starting job execution');
-    console.log(`Processing target: ${params.target}`);
-    console.log(`Action: ${params.action}`);
-
-    // TODO: Replace with your implementation
-    const { target, action, options = [], dry_run = false } = params;
-
-    if (dry_run) {
-      console.log('DRY RUN: No changes will be made');
+    // Validate required parameters
+    if (!params.type) {
+      throw new Error('type is required');
+    }
+    if (!params.audience) {
+      throw new Error('audience is required');
+    }
+    if (!params.subject) {
+      throw new Error('subject is required');
+    }
+    if (!params.eventPayload) {
+      throw new Error('eventPayload is required');
     }
 
-    // Access environment variables
-    const environment = context.env.ENVIRONMENT || 'development';
-    console.log(`Running in ${environment} environment`);
+    // Get secrets
+    const ssfKey = context.secrets?.SSF_KEY;
+    const ssfKeyId = context.secrets?.SSF_KEY_ID;
+    const authToken = context.secrets?.AUTH_TOKEN;
 
-    // Access secrets securely (example)
-    if (context.secrets.API_KEY) {
-      console.log(`Using API key ending in ...${context.secrets.API_KEY.slice(-4)}`);
+    if (!ssfKey) {
+      throw new Error('SSF_KEY secret is required');
+    }
+    if (!ssfKeyId) {
+      throw new Error('SSF_KEY_ID secret is required');
     }
 
-    // Use outputs from previous jobs in workflow
-    if (context.outputs && Object.keys(context.outputs).length > 0) {
-      console.log(`Available outputs from ${Object.keys(context.outputs).length} previous jobs`);
-      console.log(`Previous job outputs: ${Object.keys(context.outputs).join(', ')}`);
-    }
+    // Get optional parameters with defaults
+    const issuer = params.issuer || 'https://sgnl.ai/';
+    const signingMethod = params.signingMethod || 'RS256';
 
-    // TODO: Implement your business logic here
-    console.log(`Performing ${action} on ${target}...`);
+    // Parse the subject
+    const subject = parseSubject(params.subject);
 
-    if (options.length > 0) {
-      console.log(`Processing ${options.length} options: ${options.join(', ')}`);
-    }
-
-    console.log(`Successfully completed ${action} on ${target}`);
-
-    // Return structured results
-    return {
-      status: dry_run ? 'dry_run_completed' : 'success',
-      target: target,
-      action: action,
-      options_processed: options.length,
-      environment: environment,
-      processed_at: new Date().toISOString()
-      // Job completed successfully
+    // Ensure event_timestamp is set
+    const eventPayload = {
+      ...params.eventPayload,
+      event_timestamp: Math.floor(Date.now() / 1000)
     };
+
+    // Determine subject format (default to SubjectInSubId for CAEP 3.0)
+    const subjectFormat = params.subjectFormat || 'SubjectInSubId';
+
+    // Create the SET builder
+    const builder = createBuilder();
+
+    // Configure the builder
+    builder
+      .withIssuer(issuer)
+      .withAudience(params.audience)
+      .withIat(Math.floor(Date.now() / 1000));
+
+    // Add subject based on format
+    if (subjectFormat === 'SubjectInEventClaims') {
+      // Add subject to event payload for CAEP 2.0
+      eventPayload.subject = subject;
+    } else {
+      // Add subject as sub_id for CAEP 3.0
+      builder.withClaim('sub_id', subject);
+    }
+
+    // Add the event with its payload
+    builder.withEvent(params.type, eventPayload);
+
+    // Add custom claims if provided
+    if (params.customClaims) {
+      Object.entries(params.customClaims).forEach(([key, value]) => {
+        builder.withClaim(key, value);
+      });
+    }
+
+    // Sign and get the JWT
+    builder.withSigningKey(ssfKey, ssfKeyId, signingMethod);
+    const jwt = await builder.sign();
+
+    // Determine the destination URL
+    // If address is provided, use it; otherwise fail as we need a destination
+    if (!params.address && !context.environment?.SET_RECEIVER_URL) {
+      throw new Error('address parameter or SET_RECEIVER_URL environment variable is required');
+    }
+
+    const url = buildUrl(
+      params.address || context.environment?.SET_RECEIVER_URL,
+      params.addressSuffix
+    );
+
+    // Transmit the SET
+    const response = await transmitSET(url, jwt, authToken);
+
+    // Read response body
+    const responseBody = await response.text();
+
+    // Return response with proper status
+    const result = {
+      status: response.ok ? 'success' : 'failed',
+      statusCode: response.status,
+      body: responseBody
+    };
+
+    // If not successful, include error details
+    if (!response.ok) {
+      const errorMessage = `SET transmission failed: ${response.status} ${response.statusText}`;
+      if (response.status >= 500 || response.status === 429) {
+        // Server errors and rate limits are retryable
+        throw new Error(errorMessage);
+      } else {
+        // Client errors are fatal
+        result.error = errorMessage;
+      }
+    }
+
+    return result;
   },
 
   /**
-   * Error recovery handler - implement error handling logic
-   * @param {Object} params - Original params plus error information
-   * @param {Object} context - Execution context
-   * @returns {Object} Recovery results
+   * Error handler for retryable failures
    */
   error: async (params, _context) => {
-    const { error, target } = params;
-    console.error(`Job encountered error while processing ${target}: ${error.message}`);
+    const { error } = params;
 
-    // TODO: Implement your error recovery logic
-    // Example: Check if error is retryable and attempt recovery
+    // Check if this is a retryable error
+    if (error.message?.includes('429') ||
+        error.message?.includes('502') ||
+        error.message?.includes('503') ||
+        error.message?.includes('504')) {
+      // These are retryable - let the framework handle retry
+      return { status: 'retry_requested' };
+    }
 
-    // For now, just throw the error - implement your logic here
-    throw new Error(`Unable to recover from error: ${error.message}`);
+    // Non-retryable errors (401, 403, 404, etc)
+    throw error;
   },
 
   /**
-   * Graceful shutdown handler - implement cleanup logic
-   * @param {Object} params - Original params plus halt reason
-   * @param {Object} context - Execution context
-   * @returns {Object} Cleanup results
+   * Cleanup handler
    */
-  halt: async (params, _context) => {
-    const { reason, target } = params;
-    console.log(`Job is being halted (${reason}) while processing ${target}`);
-
-    // TODO: Implement your cleanup logic
-    // Example: Save partial results, close connections, etc.
-
-    return {
-      status: 'halted',
-      target: target || 'unknown',
-      reason: reason,
-      halted_at: new Date().toISOString()
-    };
+  halt: async (_params, _context) => {
+    // No cleanup needed for this action
+    return { status: 'halted' };
   }
 };

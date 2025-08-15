@@ -1,7 +1,7 @@
 {
-  "name": "@sgnl/job-template",
+  "name": "@sgnl/generic-sse-transmitter",
   "version": "1.0.0",
-  "description": "Template for SGNL JavaScript jobs",
+  "description": "Generic Security Event Token (SET) transmitter for CAEP events",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -15,10 +15,11 @@
     "validate": "node scripts/validate-metadata.js",
     "dev": "node scripts/dev-runner.js"
   },
-  "keywords": ["sgnl", "job", "template", "identity", "security"],
+  "keywords": ["sgnl", "caep", "sse", "security-events", "jwt", "identity", "security"],
   "author": "SGNL Engineering",
   "license": "MIT",
   "dependencies": {
+    "@sgnl-ai/secevent": "^1.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

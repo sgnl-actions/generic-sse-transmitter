@@ -1,48 +1,106 @@
-name: job-template
-description: Template for SGNL JavaScript jobs - replace with your job description
+name: generic-sse-transmitter
+description: Transmits Security Event Tokens (SET) for CAEP and other security events
 
 # Input parameters for web form generation
 inputs:
-  target:
+  type:
     type: text
-    description: Target resource identifier (e.g., user email, group ID)
+    description: Security event type URI (e.g., https://schemas.openid.net/secevent/caep/event-type/session-revoked)
     required: true
     validation:
       min: 1
+      max: 500
+      regex: ^https?://.*
+
+  audience:
+    type: text
+    description: Intended recipient of the SET (e.g., https://customer.okta.com/)
+    required: true
+    validation:
+      min: 1
+      max: 500
+
+  subject:
+    type: text
+    description: Subject identifier JSON (simple or complex format)
+    required: true
+    validation:
+      min: 1
+      max: 2000
+
+  eventPayload:
+    type: object
+    description: Event-specific payload data
+    required: true
+
+  address:
+    type: text
+    description: Optional override for the destination address
+    required: false
+    validation:
+      max: 500
+      regex: ^https?://.*
+
+  addressSuffix:
+    type: text
+    description: Optional suffix to append to the address
+    required: false
+    validation:
       max: 100
 
-  action:
+  customClaims:
+    type: object
+    description: Optional custom claims to add to the JWT
+    required: false
+
+  subjectFormat:
     type: text
-    description: Action to perform on the target resource
+    description: Subject format (SubjectInEventClaims or SubjectInSubId)
+    required: false
+    validation:
+      enum: ["SubjectInEventClaims", "SubjectInSubId"]
+
+  issuer:
+    type: text
+    description: Issuer identifier for the JWT (e.g., https://sgnl.ai/)
+    required: false
+    validation:
+      max: 500
+      
+  signingMethod:
+    type: text
+    description: JWT signing algorithm
+    required: false
+    validation:
+      enum: ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"]
+
+# Secrets required for operation
+secrets:
+  SSF_KEY:
+    type: text
+    description: RSA private key for signing the JWT (PEM format)
     required: true
-    validation:
-      min: 1
-      max: 50
 
-  options:
-    type: array
-    description: Additional options for the operation
-    required: false
-    item_type: text
-    validation:
-      max: 10
+  SSF_KEY_ID:
+    type: text
+    description: Key identifier for the JWT header
+    required: true
 
-  dry_run:
-    type: boolean
-    description: Preview changes without executing them
+  AUTH_TOKEN:
+    type: text
+    description: Bearer token for authenticating with the SET receiver
     required: false
-    default: false
 
 # Expected output structure
 outputs:
   status:
     type: text
-    description: Operation result (success, failed, recovered, etc.)
+    description: Operation result (success or failed)
 
-  target:
+  statusCode:
+    type: number
+    description: HTTP status code from the SET receiver
+
+  body:
     type: text
-    description: The target resource that was processed
-
-  processed_at:
-    type: datetime
-    description: When the operation completed (ISO 8601)
+    description: Response body from the SET receiver
