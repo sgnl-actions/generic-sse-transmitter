@@ -1,70 +1,48 @@
 import { jest } from '@jest/globals';
-import script from '../src/script.mjs';
 
 // Mock fetch globally
 global.fetch = jest.fn();
 
-// Create a manual mock for @sgnl-ai/secevent
-const mockBuilder = {
-  withIssuer: jest.fn().mockReturnThis(),
-  withAudience: jest.fn().mockReturnThis(),
-  withIat: jest.fn().mockReturnThis(),
-  withClaim: jest.fn().mockReturnThis(),
-  withEvent: jest.fn().mockReturnThis(),
-  withSigningKey: jest.fn().mockReturnThis(),
-  sign: jest.fn().mockResolvedValue('signed.jwt.token')
-};
-
-jest.unstable_mockModule('@sgnl-ai/secevent', () => ({
-  createBuilder: jest.fn(() => mockBuilder)
+// Mock the crypto module
+jest.unstable_mockModule('crypto', () => ({
+  createPrivateKey: jest.fn((key) => ({ type: 'private', asymmetricKeyType: 'rsa' }))
 }));
+
+// Mock @sgnl-ai/secevent module
+jest.unstable_mockModule('@sgnl-ai/secevent', () => {
+  const mockBuilder = {
+    withIssuer: jest.fn().mockReturnThis(),
+    withAudience: jest.fn().mockReturnThis(),
+    withIat: jest.fn().mockReturnThis(),
+    withClaim: jest.fn().mockReturnThis(),
+    withEvent: jest.fn().mockReturnThis(),
+    sign: jest.fn().mockResolvedValue({ jwt: 'mocked.jwt.token' })
+  };
+  
+  return {
+    createBuilder: jest.fn(() => mockBuilder)
+  };
+});
+
+// Import after mocking
+const script = (await import('../src/script.mjs')).default;
+const { createBuilder } = await import('@sgnl-ai/secevent');
 
 describe('Generic SSE Transmitter', () => {
   let mockContext;
+  let mockBuilder;
 
   beforeEach(() => {
     jest.clearAllMocks();
-
-    // Reset mock builder methods
-    Object.keys(mockBuilder).forEach(key => {
-      if (typeof mockBuilder[key].mockClear === 'function') {
-        mockBuilder[key].mockClear();
-        if (key !== 'sign') {
-          mockBuilder[key].mockReturnValue(mockBuilder);
-        }
-      }
-    });
-    mockBuilder.sign.mockResolvedValue('signed.jwt.token');
-
+    
+    // Get the mock builder
+    mockBuilder = createBuilder();
+    
     mockContext = {
       secrets: {
         SSF_KEY: `-----BEGIN PRIVATE KEY-----
 MIIEuwIBADANBgkqhkiG9w0BAQEFAASCBKUwggShAgEAAoIBAQCxFPks6MertTFK
-GpIssuiDlZZNvUq9kV1lTc90YrPvZKMdfoOzBxjdn4x7i5dWnP8oKL7Tbl5HcyMd
-LSvv3Jf1KCDQvq5jL18igC70v3nGQNjbTp9Gu/c644WHNyHr3iWDRb/GZac70CM7
-ihqMw/35bf9KZGOCX8TNPWTWpTmsyFVzEIp6G6AI0UXQGKu8gXxFPxKQfPmCSVJ3
-sDLcYnoAnA1oM9IauBtU6JBUHn1mjYHqvbuGvi726dVobdurcDJGty+Szia60R/N
-3uw8ylxrLmKws/vVG0q0tnyqKrz6/bIvt3eX21PW3TYeDFXFbQHJzYieIzk5Cgsj
-lDFZlRcjAgMBAAECgf8Dze+Mh3PCvKHSdb+uNinIqe4QvYBdkkHvazyJw5UaD49x
-ksZBkmV2XXcnMFiQA893jWiMIlLkNhULC21mOdcJ7VLHKVGVz+67TwWzPGnhWINQ
-MuA5JNCq8zhrL0QLTTqBF36HRKfTISWgodbwL0XFlhdmAcIhiu0ve6Iu+l3C2IHX
-ZML7ii0q5GOSBt74nYVll47jRbiqPF7pbP0txfnauoicaAbnofXSTrfGLz9DJnjp
-ACyqo03Dmey11BYz/DeP3nOOrBU0p+hQdMycrP2sdUt0GyBqoI8M8rvHqbWmMqhz
-kA6flGazQNK4QinEIGG8f2WB10OqK7JtRISk7fUCgYEA1Sz+wA10PEpF+kXMYGCB
-B79zwb/Ci1xOWBEsGf9pah6fW6b8vG/r16knujCF2XnvH13GP3f2RATJWthnsRT7
-J+APTEhZc9LyZyNRRjFhnT82dQx8ZFyf7VtN37xSVpQa7LltTGAlW3o9CQQ6jEuy
-Ps+NDLrWp7iIQlpP6Eb9lxUCgYEA1KfHLUdaK4zOe9QJNC4YFt2e3WRA/LOcOVi3
-Qorx22QZLZV2e4wYXROnuxDdd9ofGetQotGyBsgAbA/hEdjtH3ntFUSz/mhlFyVC
-i5g1aRcQq+6oOVVlPc1yqZWTEg4aSiYyf6W01A+fFxYFyFT5shcjB0ydBZrOChC7
-NeZ7g1cCgYALZCIgxRdG+XkPzJcFN2LttQ9MdSDCLaaKEjDXGszZPNWrIhszPo/N
-sF5NFrawTlG2zV4AmjpwnAjeb93qmoJpORHYM62EAOuvEzYOmCjtLCmOy6ICAukQ
-1+YrZHbJ5ZQivi3W/PRCFSAZ0T4HrSvTK2gQHBPIVpYBZa4LbW+zmQKBgQCwbvtb
-38U6OLrgFg4E0vF9lyZFfPZGMya8lZSGiw0a/zO8lDMXUiasorAZDmcRF1GSiZ//
-VoekBLAE+C++RQKHiPthF/1WaHrm9yz88K3voQld/MZpuyYiXqBxfv3kjvrU5lgj
-e/JJtyRBXS4zBf2c+oE/fxsQGV41D6ijkbSMRQKBgHiEF8okAzlkxopPUql4JVQM
-t3kLS+9EzVg9izmOY4h1n5LkqNjHBGcUBohjI8vY/TBpqmb/xe1gR41GZVMsxXBQ
-ClNv3gj8IdT951MAtT+5Bi1CwH74YkxCjqihkpwcBfLpSdSEQRpTma8MFfcQAXji
-iOionhOeg/oWsiSXp9OQ
+test-key-content
 -----END PRIVATE KEY-----`,
         SSF_KEY_ID: 'test-key-id',
         AUTH_TOKEN: 'Bearer test-token'
@@ -111,7 +89,7 @@ iOionhOeg/oWsiSXp9OQ
             'Accept': 'application/json',
             'Authorization': 'Bearer test-token'
           }),
-          body: 'signed.jwt.token'
+          body: 'mocked.jwt.token'
         })
       );
 
@@ -445,10 +423,10 @@ iOionhOeg/oWsiSXp9OQ
 
       await script.invoke(params, mockContext);
 
-      expect(mockBuilder.withSigningKey).toHaveBeenCalledWith(
-        mockContext.secrets.SSF_KEY,
-        mockContext.secrets.SSF_KEY_ID,
-        'RS384'
+      expect(mockBuilder.sign).toHaveBeenCalledWith(
+        expect.objectContaining({
+          alg: 'RS384'
+        })
       );
     });
 
