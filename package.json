@@ -27,7 +27,8 @@
   "author": "SGNL Engineering",
   "license": "MIT",
   "dependencies": {
-    "@sgnl-ai/secevent": "^1.0.1"
+    "@sgnl-ai/secevent": "^1.0.1",
+    "@sgnl-ai/set-transmitter": "^1.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

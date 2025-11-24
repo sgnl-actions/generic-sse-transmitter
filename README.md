@@ -8,7 +8,7 @@ This action creates, signs, and transmits Security Event Tokens (SETs) according
 
 ## Prerequisites
 
-- RSA private key for JWT signing (PEM format)
+- Pre-signed JWT Security Event Token (created externally) (PEM format)
 - SET receiver endpoint URL
 - Optional: Bearer token for receiver authentication
 
@@ -18,9 +18,7 @@ This action creates, signs, and transmits Security Event Tokens (SETs) according
 
 | Name | Description | Required |
 |------|-------------|----------|
-| `SSF_KEY` | RSA private key in PEM format for signing JWTs | Yes |
-| `SSF_KEY_ID` | Key identifier to include in JWT header | Yes |
-| `AUTH_TOKEN` | Bearer token for authenticating with SET receiver | No |
+| `BEARER_AUTH_TOKEN` | Bearer token for authenticating with SET receiver | No |
 
 ### Inputs
 
@@ -145,7 +143,7 @@ The action distinguishes between retryable and non-retryable errors:
 
 1. **Private Key Security**: The RSA private key (`SSF_KEY`) should be stored securely and rotated regularly
 2. **Key ID Management**: The `SSF_KEY_ID` should match the key registered with the SET receiver
-3. **Bearer Token**: If the receiver requires authentication, ensure the `AUTH_TOKEN` is kept secure
+3. **Bearer Token**: If the receiver requires authentication, ensure the `BEARER_AUTH_TOKEN` is kept secure
 4. **Subject PII**: Be mindful of personally identifiable information in subject fields
 5. **Event Payload**: Avoid including sensitive data in event payloads unless necessary
 
@@ -173,7 +171,7 @@ Any custom event type URI can be used as long as the receiver supports it.
    - Check for proper escaping of quotes
 
 3. **"SET transmission failed: 401 Unauthorized"**
-   - Verify the AUTH_TOKEN is correct
+   - Verify the `BEARER_AUTH_TOKEN` is correct
    - Check if the receiver requires a specific token format
 
 4. **"address parameter or SET_RECEIVER_URL environment variable is required"**
