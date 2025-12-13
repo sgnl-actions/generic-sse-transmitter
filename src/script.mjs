@@ -1,5 +1,6 @@
 import { createBuilder } from '@sgnl-ai/secevent';
 import { createPrivateKey } from 'crypto';
+import {resolveJSONPathTemplates} from '@sgnl-actions/utils';
 
 /**
  * Transmits a Security Event Token (SET) to the specified endpoint
@@ -65,17 +66,25 @@ export default {
    * Main handler for transmitting Security Event Tokens
    */
   invoke: async (params, context) => {
+    const jobContext = context.data || {};
+
+    // Resolve JSONPath templates in params
+    const { result: resolvedParams, errors } = resolveJSONPathTemplates(params, jobContext);
+    if (errors.length > 0) {
+     console.warn('Template resolution errors:', errors);
+    }
+
     // Validate required parameters
-    if (!params.type) {
+    if (!resolvedParams.type) {
       throw new Error('type is required');
     }
-    if (!params.audience) {
+    if (!resolvedParams.audience) {
       throw new Error('audience is required');
     }
-    if (!params.subject) {
+    if (!resolvedParams.subject) {
       throw new Error('subject is required');
     }
-    if (!params.eventPayload) {
+    if (!resolvedParams.eventPayload) {
       throw new Error('eventPayload is required');
     }
 
@@ -92,20 +101,20 @@ export default {
     }
 
     // Get optional parameters with defaults
-    const issuer = params.issuer || 'https://sgnl.ai/';
-    const signingMethod = params.signingMethod || 'RS256';
+    const issuer = resolvedParams.issuer || 'https://sgnl.ai/';
+    const signingMethod = resolvedParams.signingMethod || 'RS256';
 
     // Parse the subject
-    const subject = parseSubject(params.subject);
+    const subject = parseSubject(resolvedParams.subject);
 
     // Ensure event_timestamp is set
     const eventPayload = {
-      ...params.eventPayload,
+      ...resolvedParams.eventPayload,
       event_timestamp: Math.floor(Date.now() / 1000)
     };
 
     // Determine subject format (default to SubjectInSubId for CAEP 3.0)
-    const subjectFormat = params.subjectFormat || 'SubjectInSubId';
+    const subjectFormat = resolvedParams.subjectFormat || 'SubjectInSubId';
 
     // Create the SET builder
     const builder = createBuilder();
@@ -113,7 +122,7 @@ export default {
     // Configure the builder
     builder
       .withIssuer(issuer)
-      .withAudience(params.audience)
+      .withAudience(resolvedParams.audience)
       .withIat(Math.floor(Date.now() / 1000));
 
     // Add subject based on format
@@ -126,11 +135,11 @@ export default {
     }
 
     // Add the event with its payload
-    builder.withEvent(params.type, eventPayload);
+    builder.withEvent(resolvedParams.type, eventPayload);
 
     // Add custom claims if provided
-    if (params.customClaims) {
-      Object.entries(params.customClaims).forEach(([key, value]) => {
+    if (resolvedParams.customClaims) {
+      Object.entries(resolvedParams.customClaims).forEach(([key, value]) => {
         builder.withClaim(key, value);
       });
     }
@@ -149,13 +158,13 @@ export default {
 
     // Determine the destination URL
     // If address is provided, use it; otherwise fail as we need a destination
-    if (!params.address && !context.environment?.SET_RECEIVER_URL) {
+    if (!resolvedParams.address && !context.environment?.SET_RECEIVER_URL) {
       throw new Error('address parameter or SET_RECEIVER_URL environment variable is required');
     }
 
     const url = buildUrl(
-      params.address || context.environment?.SET_RECEIVER_URL,
-      params.addressSuffix
+      resolvedParams.address || context.environment?.SET_RECEIVER_URL,
+      resolvedParams.addressSuffix
     );
 
     // Transmit the SET
