@@ -4,6 +4,7 @@
 var node_buffer = require('node:buffer');
 var crypto$1 = require('node:crypto');
 var util = require('node:util');
+var crypto$2 = require('crypto');
 
 function _interopNamespaceDefault(e) {
     var n = Object.create(null);
@@ -1242,8 +1243,16 @@ var script = {
     }
 
     // Sign and get the JWT
-    builder.withSigningKey(ssfKey, ssfKeyId, signingMethod);
-    const jwt = await builder.sign();
+    // Parse the PEM key into a KeyObject
+    const privateKeyObject = crypto$2.createPrivateKey(ssfKey);
+    
+    const signingKey = {
+      key: privateKeyObject,
+      alg: signingMethod,
+      kid: ssfKeyId
+    };
+    const signResult = await builder.sign(signingKey);
+    const jwt = signResult.jwt;
 
     // Determine the destination URL
     // If address is provided, use it; otherwise fail as we need a destination
