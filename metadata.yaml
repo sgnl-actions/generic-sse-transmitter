@@ -1,8 +1,5 @@
 name: generic-sse-transmitter
 description: Transmits Security Event Tokens (SET) for CAEP and other security events
-version: 1.0.0
-runtime: nodejs-22
-type: set-transmitter
 
 # Input parameters for web form generation
 inputs:
