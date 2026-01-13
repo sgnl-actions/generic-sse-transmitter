@@ -1,62 +1,54 @@
 import { jest } from '@jest/globals';
 
-// Mock fetch globally
-global.fetch = jest.fn();
-
-// Mock the crypto module
-jest.unstable_mockModule('crypto', () => ({
-  createPrivateKey: jest.fn((key) => ({ type: 'private', asymmetricKeyType: 'rsa' }))
+// Mock dependencies before importing script
+jest.unstable_mockModule('@sgnl-ai/set-transmitter', () => ({
+  transmitSET: jest.fn().mockResolvedValue({
+    status: 'success',
+    statusCode: 200,
+    body: '{"accepted": true}',
+    retryable: false
+  })
 }));
 
-// Mock @sgnl-ai/secevent module
-jest.unstable_mockModule('@sgnl-ai/secevent', () => {
-  const mockBuilder = {
-    withIssuer: jest.fn().mockReturnThis(),
-    withAudience: jest.fn().mockReturnThis(),
-    withIat: jest.fn().mockReturnThis(),
-    withClaim: jest.fn().mockReturnThis(),
-    withEvent: jest.fn().mockReturnThis(),
-    sign: jest.fn().mockResolvedValue({ jwt: 'mocked.jwt.token' })
-  };
-  
-  return {
-    createBuilder: jest.fn(() => mockBuilder)
-  };
-});
+jest.unstable_mockModule('@sgnl-actions/utils', () => ({
+  resolveJSONPathTemplates: jest.fn((params) => ({ result: params, errors: [] })),
+  signSET: jest.fn().mockResolvedValue('mock.jwt.token'),
+  getBaseURL: jest.fn((params, context) => params.address || context.environment?.ADDRESS),
+  getAuthorizationHeader: jest.fn().mockResolvedValue('Bearer test-token')
+}));
 
-// Import after mocking
-const script = (await import('../src/script.mjs')).default;
-const { createBuilder } = await import('@sgnl-ai/secevent');
+const { transmitSET } = await import('@sgnl-ai/set-transmitter');
+const { resolveJSONPathTemplates, signSET, getBaseURL, getAuthorizationHeader } = await import('@sgnl-actions/utils');
+const script = await import('../src/script.mjs');
 
 describe('Generic SSE Transmitter', () => {
   let mockContext;
-  let mockBuilder;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    
-    // Get the mock builder
-    mockBuilder = createBuilder();
-    
+
     mockContext = {
       secrets: {
-        SSF_KEY: `-----BEGIN PRIVATE KEY-----
-MIIEuwIBADANBgkqhkiG9w0BAQEFAASCBKUwggShAgEAAoIBAQCxFPks6MertTFK
-test-key-content
------END PRIVATE KEY-----`,
-        SSF_KEY_ID: 'test-key-id',
-        AUTH_TOKEN: 'Bearer test-token'
+        BEARER_AUTH_TOKEN: 'test-bearer-token'
       },
-      environment: {}
+      environment: {
+        ADDRESS: 'https://default.receiver.com/events'
+      },
+      crypto: {
+        signJWT: jest.fn().mockResolvedValue('signed.jwt.token')
+      }
     };
 
-    // Default fetch mock - successful response
-    global.fetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      text: jest.fn().mockResolvedValue('{"accepted": true}')
+    transmitSET.mockResolvedValue({
+      status: 'success',
+      statusCode: 200,
+      body: '{"accepted": true}',
+      retryable: false
     });
+    resolveJSONPathTemplates.mockImplementation((params) => ({ result: params, errors: [] }));
+    signSET.mockResolvedValue('mock.jwt.token');
+    getBaseURL.mockImplementation((params, context) => params.address || context.environment?.ADDRESS);
+    getAuthorizationHeader.mockResolvedValue('Bearer test-token');
   });
 
   describe('invoke handler', () => {
@@ -72,34 +64,40 @@ test-key-content
         address: 'https://receiver.example.com/events'
       };
 
-      const result = await script.invoke(params, mockContext);
+      const result = await script.default.invoke(params, mockContext);
 
       expect(result).toEqual({
         status: 'success',
         statusCode: 200,
-        body: '{"accepted": true}'
+        body: '{"accepted": true}',
+        retryable: false
       });
 
-      expect(global.fetch).toHaveBeenCalledWith(
-        'https://receiver.example.com/events',
+      expect(getBaseURL).toHaveBeenCalledWith(params, mockContext);
+      expect(getAuthorizationHeader).toHaveBeenCalledWith(mockContext);
+      expect(signSET).toHaveBeenCalledWith(
+        mockContext,
         expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            'Content-Type': 'application/secevent+jwt',
-            'Accept': 'application/json',
-            'Authorization': 'Bearer test-token'
-          }),
-          body: 'mocked.jwt.token'
+          aud: 'https://customer.okta.com/',
+          sub_id: { format: 'email', email: 'user@example.com' },
+          events: expect.objectContaining({
+            'https://schemas.openid.net/secevent/caep/event-type/session-revoked': expect.objectContaining({
+              initiating_entity: 'policy',
+              reason_user: 'Session terminated due to policy',
+              event_timestamp: expect.any(Number)
+            })
+          })
         })
       );
 
-      expect(mockBuilder.withAudience).toHaveBeenCalledWith('https://customer.okta.com/');
-      expect(mockBuilder.withEvent).toHaveBeenCalledWith(
-        'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+      expect(transmitSET).toHaveBeenCalledWith(
+        'mock.jwt.token',
+        'https://receiver.example.com/events',
         expect.objectContaining({
-          initiating_entity: 'policy',
-          reason_user: 'Session terminated due to policy',
-          event_timestamp: expect.any(Number)
+          headers: expect.objectContaining({
+            'Authorization': 'Bearer test-token',
+            'User-Agent': 'SGNL-CAEP-Hub/2.0'
+          })
         })
       );
     });
@@ -116,15 +114,17 @@ test-key-content
         address: 'https://receiver.example.com/events'
       };
 
-      const result = await script.invoke(params, mockContext);
+      const result = await script.default.invoke(params, mockContext);
       expect(result.status).toBe('success');
-      
+
       // Verify subject was added as sub_id claim
-      expect(mockBuilder.withClaim).toHaveBeenCalledWith(
-        'sub_id',
+      expect(signSET).toHaveBeenCalledWith(
+        mockContext,
         expect.objectContaining({
-          user: expect.objectContaining({ format: 'email', email: 'user@example.com' }),
-          session: expect.objectContaining({ format: 'opaque', id: 'session-123' })
+          sub_id: expect.objectContaining({
+            user: expect.objectContaining({ format: 'email', email: 'user@example.com' }),
+            session: expect.objectContaining({ format: 'opaque', id: 'session-123' })
+          })
         })
       );
     });
@@ -139,9 +139,10 @@ test-key-content
         addressSuffix: '/caep/events'
       };
 
-      await script.invoke(params, mockContext);
+      await script.default.invoke(params, mockContext);
 
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect(transmitSET).toHaveBeenCalledWith(
+        'mock.jwt.token',
         'https://receiver.example.com/caep/events',
         expect.any(Object)
       );
@@ -160,25 +161,15 @@ test-key-content
         }
       };
 
-      await script.invoke(params, mockContext);
+      await script.default.invoke(params, mockContext);
 
-      expect(mockBuilder.withClaim).toHaveBeenCalledWith('custom_field', 'value');
-      expect(mockBuilder.withClaim).toHaveBeenCalledWith('another_field', 123);
-    });
-
-    it('should use custom issuer when provided', async () => {
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        audience: 'https://customer.okta.com/',
-        subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
-        address: 'https://receiver.example.com/events',
-        issuer: 'https://custom.issuer.com/'
-      };
-
-      await script.invoke(params, mockContext);
-
-      expect(mockBuilder.withIssuer).toHaveBeenCalledWith('https://custom.issuer.com/');
+      expect(signSET).toHaveBeenCalledWith(
+        mockContext,
+        expect.objectContaining({
+          custom_field: 'value',
+          another_field: 123
+        })
+      );
     });
 
     it('should use SubjectInEventClaims format when specified', async () => {
@@ -191,22 +182,24 @@ test-key-content
         subjectFormat: 'SubjectInEventClaims'
       };
 
-      await script.invoke(params, mockContext);
+      await script.default.invoke(params, mockContext);
 
       // When using SubjectInEventClaims, subject should be in event payload
-      expect(mockBuilder.withEvent).toHaveBeenCalledWith(
-        'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+      expect(signSET).toHaveBeenCalledWith(
+        mockContext,
         expect.objectContaining({
-          subject: JSON.parse(params.subject),
-          event_timestamp: expect.any(Number)
+          events: expect.objectContaining({
+            'https://schemas.openid.net/secevent/caep/event-type/session-revoked': expect.objectContaining({
+              subject: JSON.parse(params.subject),
+              event_timestamp: expect.any(Number)
+            })
+          })
         })
       );
-      
-      // And sub_id claim should not be added
-      expect(mockBuilder.withClaim).not.toHaveBeenCalledWith(
-        'sub_id',
-        expect.anything()
-      );
+
+      // And sub_id claim should not be present
+      const callArgs = signSET.mock.calls[0][1];
+      expect(callArgs.sub_id).toBeUndefined();
     });
 
     it('should fail when required type is missing', async () => {
@@ -217,7 +210,7 @@ test-key-content
         address: 'https://receiver.example.com/events'
       };
 
-      await expect(script.invoke(params, mockContext))
+      await expect(script.default.invoke(params, mockContext))
         .rejects.toThrow('type is required');
     });
 
@@ -229,7 +222,7 @@ test-key-content
         address: 'https://receiver.example.com/events'
       };
 
-      await expect(script.invoke(params, mockContext))
+      await expect(script.default.invoke(params, mockContext))
         .rejects.toThrow('audience is required');
     });
 
@@ -241,50 +234,20 @@ test-key-content
         address: 'https://receiver.example.com/events'
       };
 
-      await expect(script.invoke(params, mockContext))
+      await expect(script.default.invoke(params, mockContext))
         .rejects.toThrow('subject is required');
     });
 
-    it('should fail when SSF_KEY secret is missing', async () => {
+    it('should fail when required eventPayload is missing', async () => {
       const params = {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
         subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
         address: 'https://receiver.example.com/events'
       };
 
-      delete mockContext.secrets.SSF_KEY;
-
-      await expect(script.invoke(params, mockContext))
-        .rejects.toThrow('SSF_KEY secret is required');
-    });
-
-    it('should fail when SSF_KEY_ID secret is missing', async () => {
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        audience: 'https://customer.okta.com/',
-        subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
-        address: 'https://receiver.example.com/events'
-      };
-
-      delete mockContext.secrets.SSF_KEY_ID;
-
-      await expect(script.invoke(params, mockContext))
-        .rejects.toThrow('SSF_KEY_ID secret is required');
-    });
-
-    it('should fail when address is not provided', async () => {
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        audience: 'https://customer.okta.com/',
-        subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {}
-      };
-
-      await expect(script.invoke(params, mockContext))
-        .rejects.toThrow('address parameter or SET_RECEIVER_URL environment variable is required');
+      await expect(script.default.invoke(params, mockContext))
+        .rejects.toThrow('eventPayload is required');
     });
 
     it('should fail with invalid subject JSON', async () => {
@@ -296,16 +259,16 @@ test-key-content
         address: 'https://receiver.example.com/events'
       };
 
-      await expect(script.invoke(params, mockContext))
+      await expect(script.default.invoke(params, mockContext))
         .rejects.toThrow('Invalid subject JSON');
     });
 
-    it('should throw on 429 rate limit error', async () => {
-      global.fetch.mockResolvedValue({
-        ok: false,
-        status: 429,
-        statusText: 'Too Many Requests',
-        text: jest.fn().mockResolvedValue('Rate limited')
+    it('should handle transmitSET failures', async () => {
+      transmitSET.mockResolvedValueOnce({
+        status: 'failed',
+        statusCode: 401,
+        body: 'Invalid token',
+        retryable: false
       });
 
       const params = {
@@ -316,80 +279,17 @@ test-key-content
         address: 'https://receiver.example.com/events'
       };
 
-      await expect(script.invoke(params, mockContext))
-        .rejects.toThrow('SET transmission failed: 429 Too Many Requests');
-    });
-
-    it('should throw on 500 server error', async () => {
-      global.fetch.mockResolvedValue({
-        ok: false,
-        status: 500,
-        statusText: 'Internal Server Error',
-        text: jest.fn().mockResolvedValue('Server error')
-      });
-
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        audience: 'https://customer.okta.com/',
-        subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
-        address: 'https://receiver.example.com/events'
-      };
-
-      await expect(script.invoke(params, mockContext))
-        .rejects.toThrow('SET transmission failed: 500 Internal Server Error');
-    });
-
-    it('should return failed status for 401 error', async () => {
-      global.fetch.mockResolvedValue({
-        ok: false,
-        status: 401,
-        statusText: 'Unauthorized',
-        text: jest.fn().mockResolvedValue('Invalid token')
-      });
-
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        audience: 'https://customer.okta.com/',
-        subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
-        address: 'https://receiver.example.com/events'
-      };
-
-      const result = await script.invoke(params, mockContext);
+      const result = await script.default.invoke(params, mockContext);
 
       expect(result).toEqual({
         status: 'failed',
         statusCode: 401,
         body: 'Invalid token',
-        error: 'SET transmission failed: 401 Unauthorized'
+        retryable: false
       });
     });
 
-    it('should not include auth header when AUTH_TOKEN is missing', async () => {
-      delete mockContext.secrets.AUTH_TOKEN;
-
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        audience: 'https://customer.okta.com/',
-        subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
-        address: 'https://receiver.example.com/events'
-      };
-
-      await script.invoke(params, mockContext);
-
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          headers: expect.not.objectContaining({
-            'Authorization': expect.any(String)
-          })
-        })
-      );
-    });
-
-    it('should add event_timestamp to eventPayload', async () => {
+    it('should add event_timestamp to eventPayload if not present', async () => {
       const params = {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
@@ -400,32 +300,17 @@ test-key-content
         address: 'https://receiver.example.com/events'
       };
 
-      await script.invoke(params, mockContext);
+      await script.default.invoke(params, mockContext);
 
-      expect(mockBuilder.withEvent).toHaveBeenCalledWith(
-        'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+      expect(signSET).toHaveBeenCalledWith(
+        mockContext,
         expect.objectContaining({
-          initiating_entity: 'policy',
-          event_timestamp: expect.any(Number)
-        })
-      );
-    });
-
-    it('should use custom signing method when provided', async () => {
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        audience: 'https://customer.okta.com/',
-        subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
-        address: 'https://receiver.example.com/events',
-        signingMethod: 'RS384'
-      };
-
-      await script.invoke(params, mockContext);
-
-      expect(mockBuilder.sign).toHaveBeenCalledWith(
-        expect.objectContaining({
-          alg: 'RS384'
+          events: expect.objectContaining({
+            'https://schemas.openid.net/secevent/caep/event-type/session-revoked': expect.objectContaining({
+              initiating_entity: 'policy',
+              event_timestamp: expect.any(Number)
+            })
+          })
         })
       );
     });
@@ -440,17 +325,16 @@ test-key-content
         addressSuffix: '/caep/events'
       };
 
-      await script.invoke(params, mockContext);
+      await script.default.invoke(params, mockContext);
 
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect(transmitSET).toHaveBeenCalledWith(
+        'mock.jwt.token',
         'https://receiver.example.com/caep/events',
         expect.any(Object)
       );
     });
 
-    it('should use SET_RECEIVER_URL from environment when address not provided', async () => {
-      mockContext.environment.SET_RECEIVER_URL = 'https://env.receiver.com/events';
-
+    it('should use ADDRESS from environment when address not provided', async () => {
       const params = {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
@@ -458,12 +342,64 @@ test-key-content
         eventPayload: {}
       };
 
-      await script.invoke(params, mockContext);
+      await script.default.invoke(params, mockContext);
 
-      expect(global.fetch).toHaveBeenCalledWith(
-        'https://env.receiver.com/events',
-        expect.any(Object)
+      expect(getBaseURL).toHaveBeenCalledWith(
+        params,
+        mockContext
       );
+    });
+
+    it('should resolve JSONPath templates', async () => {
+      resolveJSONPathTemplates.mockReturnValueOnce({
+        result: {
+          type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+          audience: 'https://customer.okta.com/',
+          subject: '{"format":"email","email":"resolved@example.com"}',
+          eventPayload: { resolved: true },
+          address: 'https://receiver.example.com/events'
+        },
+        errors: []
+      });
+
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      await script.default.invoke(params, mockContext);
+
+      expect(resolveJSONPathTemplates).toHaveBeenCalledWith(params, {});
+    });
+
+    it('should log template resolution errors', async () => {
+      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      resolveJSONPathTemplates.mockReturnValueOnce({
+        result: {
+          type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+          audience: 'https://customer.okta.com/',
+          subject: '{"format":"email","email":"user@example.com"}',
+          eventPayload: {},
+          address: 'https://receiver.example.com/events'
+        },
+        errors: ['Template error 1', 'Template error 2']
+      });
+
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: {},
+        address: 'https://receiver.example.com/events'
+      };
+
+      await script.default.invoke(params, mockContext);
+
+      expect(consoleWarnSpy).toHaveBeenCalledWith('Template resolution errors:', ['Template error 1', 'Template error 2']);
+      consoleWarnSpy.mockRestore();
     });
   });
 
@@ -473,7 +409,7 @@ test-key-content
         error: new Error('SET transmission failed: 429 Too Many Requests')
       };
 
-      const result = await script.error(params, mockContext);
+      const result = await script.default.error(params, mockContext);
       expect(result).toEqual({ status: 'retry_requested' });
     });
 
@@ -482,7 +418,7 @@ test-key-content
         error: new Error('SET transmission failed: 502 Bad Gateway')
       };
 
-      const result = await script.error(params, mockContext);
+      const result = await script.default.error(params, mockContext);
       expect(result).toEqual({ status: 'retry_requested' });
     });
 
@@ -491,7 +427,7 @@ test-key-content
         error: new Error('SET transmission failed: 503 Service Unavailable')
       };
 
-      const result = await script.error(params, mockContext);
+      const result = await script.default.error(params, mockContext);
       expect(result).toEqual({ status: 'retry_requested' });
     });
 
@@ -500,7 +436,7 @@ test-key-content
         error: new Error('SET transmission failed: 504 Gateway Timeout')
       };
 
-      const result = await script.error(params, mockContext);
+      const result = await script.default.error(params, mockContext);
       expect(result).toEqual({ status: 'retry_requested' });
     });
 
@@ -509,7 +445,7 @@ test-key-content
         error: new Error('SET transmission failed: 401 Unauthorized')
       };
 
-      await expect(script.error(params, mockContext))
+      await expect(script.default.error(params, mockContext))
         .rejects.toThrow('SET transmission failed: 401 Unauthorized');
     });
 
@@ -518,7 +454,7 @@ test-key-content
         error: new Error('Some other error')
       };
 
-      await expect(script.error(params, mockContext))
+      await expect(script.default.error(params, mockContext))
         .rejects.toThrow('Some other error');
     });
   });
@@ -526,7 +462,7 @@ test-key-content
   describe('halt handler', () => {
     it('should return halted status', async () => {
       const params = {};
-      const result = await script.halt(params, mockContext);
+      const result = await script.default.halt(params, mockContext);
 
       expect(result).toEqual({ status: 'halted' });
     });

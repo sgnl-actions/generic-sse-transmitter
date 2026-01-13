@@ -1,34 +1,5 @@
-import { createBuilder } from '@sgnl-ai/secevent';
-import { createPrivateKey } from 'crypto';
-
-/**
- * Transmits a Security Event Token (SET) to the specified endpoint
- * @param {string} url - The destination URL
- * @param {string} jwt - The signed JWT to transmit
- * @param {string} [authToken] - Optional bearer token for authentication
- * @returns {Promise<Response>} The HTTP response
- */
-async function transmitSET(url, jwt, authToken) {
-  const headers = {
-    'Accept': 'application/json',
-    'Content-Type': 'application/secevent+jwt',
-    'User-Agent': 'SGNL-Action-Framework/1.0'
-  };
-
-  if (authToken) {
-    headers['Authorization'] = authToken.startsWith('Bearer ')
-      ? authToken
-      : `Bearer ${authToken}`;
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: jwt
-  });
-
-  return response;
-}
+import { getAuthorizationHeader, getBaseURL, resolveJSONPathTemplates, signSET } from '@sgnl-actions/utils';
+import { transmitSET } from '@sgnl-ai/set-transmitter';
 
 /**
  * Parse subject JSON string into the appropriate format
@@ -62,7 +33,41 @@ function buildUrl(address, suffix) {
 
 export default {
   /**
-   * Main handler for transmitting Security Event Tokens
+   * Main execution handler - transmits a generic Security Event Token
+   *
+   * @param {Object} params - Job input parameters
+   * @param {string} params.type - Security event type URI (e.g., https://schemas.openid.net/secevent/caep/event-type/session-revoked)
+   * @param {string} params.audience - Intended recipient of the SET (e.g., https://customer.okta.com/)
+   * @param {string} params.subject - Subject identifier JSON (simple or complex format)
+   * @param {Object} params.eventPayload - Event-specific payload data
+   * @param {string} params.address - Optional destination URL override (defaults to ADDRESS environment variable)
+   * @param {string} params.addressSuffix - Optional suffix to append to the address
+   * @param {Object} params.customClaims - Optional custom claims to add to the JWT
+   * @param {string} params.subjectFormat - Subject format (SubjectInEventClaims or SubjectInSubId, defaults to SubjectInSubId)
+   *
+   * @param {Object} context - Execution context with secrets and environment
+   * @param {Object} context.environment - Environment configuration
+   * @param {string} context.environment.ADDRESS - Default destination URL for the SET transmission
+   *
+   * The configured auth type will determine which of the following environment variables and secrets are available
+   * @param {string} context.secrets.BEARER_AUTH_TOKEN
+   *
+   * @param {string} context.secrets.BASIC_USERNAME
+   * @param {string} context.secrets.BASIC_PASSWORD
+   *
+   * @param {string} context.secrets.OAUTH2_CLIENT_CREDENTIALS_CLIENT_SECRET
+   * @param {string} context.environment.OAUTH2_CLIENT_CREDENTIALS_AUDIENCE
+   * @param {string} context.environment.OAUTH2_CLIENT_CREDENTIALS_AUTH_STYLE
+   * @param {string} context.environment.OAUTH2_CLIENT_CREDENTIALS_CLIENT_ID
+   * @param {string} context.environment.OAUTH2_CLIENT_CREDENTIALS_SCOPE
+   * @param {string} context.environment.OAUTH2_CLIENT_CREDENTIALS_TOKEN_URL
+   *
+   * @param {string} context.secrets.OAUTH2_AUTHORIZATION_CODE_ACCESS_TOKEN
+   *
+   * @param {Object} context.crypto - Cryptographic operations API
+   * @param {Function} context.crypto.signJWT - Function to sign JWTs with server-side keys
+   *
+   * @returns {Object} Transmission result with status, statusCode, body, and retryable flag
    */
   invoke: async (params, context) => {
     // Validate required parameters
@@ -79,111 +84,68 @@ export default {
       throw new Error('eventPayload is required');
     }
 
-    // Get secrets
-    const ssfKey = context.secrets?.SSF_KEY;
-    const ssfKeyId = context.secrets?.SSF_KEY_ID;
-    const authToken = context.secrets?.AUTH_TOKEN;
+    const jobContext = context.data || {};
 
-    if (!ssfKey) {
-      throw new Error('SSF_KEY secret is required');
-    }
-    if (!ssfKeyId) {
-      throw new Error('SSF_KEY_ID secret is required');
+    // Resolve JSONPath templates in params
+    const { result: resolvedParams, errors } = resolveJSONPathTemplates(params, jobContext);
+    if (errors.length > 0) {
+      console.warn('Template resolution errors:', errors);
     }
 
-    // Get optional parameters with defaults
-    const issuer = params.issuer || 'https://sgnl.ai/';
-    const signingMethod = params.signingMethod || 'RS256';
+    // Get the base address
+    const baseAddress = getBaseURL(resolvedParams, context);
+
+    // Build complete URL with optional suffix
+    const address = buildUrl(baseAddress, resolvedParams.addressSuffix);
+
+    const authHeader = await getAuthorizationHeader(context);
 
     // Parse the subject
-    const subject = parseSubject(params.subject);
+    const subject = parseSubject(resolvedParams.subject);
 
-    // Ensure event_timestamp is set
+    // Build event payload with current timestamp
     const eventPayload = {
-      ...params.eventPayload,
+      ...resolvedParams.eventPayload,
       event_timestamp: Math.floor(Date.now() / 1000)
     };
 
     // Determine subject format (default to SubjectInSubId for CAEP 3.0)
-    const subjectFormat = params.subjectFormat || 'SubjectInSubId';
+    const subjectFormat = resolvedParams.subjectFormat || 'SubjectInSubId';
 
-    // Create the SET builder
-    const builder = createBuilder();
-
-    // Configure the builder
-    builder
-      .withIssuer(issuer)
-      .withAudience(params.audience)
-      .withIat(Math.floor(Date.now() / 1000));
+    // Build the SET payload
+    const setPayload = {
+      aud: resolvedParams.audience,
+      events: {
+        [resolvedParams.type]: eventPayload
+      }
+    };
 
     // Add subject based on format
     if (subjectFormat === 'SubjectInEventClaims') {
-      // Add subject to event payload for CAEP 2.0
-      eventPayload.subject = subject;
+      // Add subject to event payload for CAEP 2.0 or Okta events
+      setPayload.events[resolvedParams.type].subject = subject;
     } else {
       // Add subject as sub_id for CAEP 3.0
-      builder.withClaim('sub_id', subject);
+      setPayload.sub_id = subject;
     }
 
-    // Add the event with its payload
-    builder.withEvent(params.type, eventPayload);
-
     // Add custom claims if provided
-    if (params.customClaims) {
-      Object.entries(params.customClaims).forEach(([key, value]) => {
-        builder.withClaim(key, value);
+    if (resolvedParams.customClaims) {
+      Object.entries(resolvedParams.customClaims).forEach(([key, value]) => {
+        setPayload[key] = value;
       });
     }
 
-    // Sign and get the JWT
-    // Parse the PEM key into a KeyObject
-    const privateKeyObject = createPrivateKey(ssfKey);
-    
-    const signingKey = {
-      key: privateKeyObject,
-      alg: signingMethod,
-      kid: ssfKeyId
-    };
-    const signResult = await builder.sign(signingKey);
-    const jwt = signResult.jwt;
-
-    // Determine the destination URL
-    // If address is provided, use it; otherwise fail as we need a destination
-    if (!params.address && !context.environment?.SET_RECEIVER_URL) {
-      throw new Error('address parameter or SET_RECEIVER_URL environment variable is required');
-    }
-
-    const url = buildUrl(
-      params.address || context.environment?.SET_RECEIVER_URL,
-      params.addressSuffix
-    );
+    // Sign the SET
+    const jwt = await signSET(context, setPayload);
 
     // Transmit the SET
-    const response = await transmitSET(url, jwt, authToken);
-
-    // Read response body
-    const responseBody = await response.text();
-
-    // Return response with proper status
-    const result = {
-      status: response.ok ? 'success' : 'failed',
-      statusCode: response.status,
-      body: responseBody
-    };
-
-    // If not successful, include error details
-    if (!response.ok) {
-      const errorMessage = `SET transmission failed: ${response.status} ${response.statusText}`;
-      if (response.status >= 500 || response.status === 429) {
-        // Server errors and rate limits are retryable
-        throw new Error(errorMessage);
-      } else {
-        // Client errors are fatal
-        result.error = errorMessage;
+    return await transmitSET(jwt, address, {
+      headers: {
+        'Authorization': authHeader,
+        'User-Agent': 'SGNL-CAEP-Hub/2.0'
       }
-    }
-
-    return result;
+    });
   },
 
   /**
@@ -197,11 +159,10 @@ export default {
         error.message?.includes('502') ||
         error.message?.includes('503') ||
         error.message?.includes('504')) {
-      // These are retryable - let the framework handle retry
       return { status: 'retry_requested' };
     }
 
-    // Non-retryable errors (401, 403, 404, etc)
+    // Non-retryable error
     throw error;
   },
 
@@ -209,7 +170,6 @@ export default {
    * Cleanup handler
    */
   halt: async (_params, _context) => {
-    // No cleanup needed for this action
     return { status: 'halted' };
   }
 };

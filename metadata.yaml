@@ -35,7 +35,7 @@ inputs:
 
   address:
     type: text
-    description: Optional override for the destination address
+    description: Optional destination URL override (defaults to ADDRESS environment variable)
     required: false
     validation:
       max: 500
@@ -55,47 +55,16 @@ inputs:
 
   subjectFormat:
     type: text
-    description: Subject format (SubjectInEventClaims or SubjectInSubId)
+    description: Subject format (SubjectInEventClaims for CAEP 2.0/Okta events, SubjectInSubId for CAEP 3.0)
     required: false
     validation:
       enum: ["SubjectInEventClaims", "SubjectInSubId"]
-
-  issuer:
-    type: text
-    description: Issuer identifier for the JWT (e.g., https://sgnl.ai/)
-    required: false
-    validation:
-      max: 500
-      
-  signingMethod:
-    type: text
-    description: JWT signing algorithm
-    required: false
-    validation:
-      enum: ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"]
-
-# Secrets required for operation
-secrets:
-  SSF_KEY:
-    type: text
-    description: RSA private key for signing the JWT (PEM format)
-    required: true
-
-  SSF_KEY_ID:
-    type: text
-    description: Key identifier for the JWT header
-    required: true
-
-  AUTH_TOKEN:
-    type: text
-    description: Bearer token for authenticating with the SET receiver
-    required: false
 
 # Expected output structure
 outputs:
   status:
     type: text
-    description: Operation result (success or failed)
+    description: Transmission status ('success' or 'failed')
 
   statusCode:
     type: number
@@ -104,3 +73,7 @@ outputs:
   body:
     type: text
     description: Response body from the SET receiver
+
+  retryable:
+    type: boolean
+    description: Whether the error is retryable (for failed requests)
