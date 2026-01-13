@@ -315,32 +315,6 @@ describe('Generic SSE Transmitter', () => {
       );
     });
 
-    it('should preserve existing event_timestamp in eventPayload', async () => {
-      const customTimestamp = 1234567890;
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        audience: 'https://customer.okta.com/',
-        subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {
-          event_timestamp: customTimestamp
-        },
-        address: 'https://receiver.example.com/events'
-      };
-
-      await script.default.invoke(params, mockContext);
-
-      expect(signSET).toHaveBeenCalledWith(
-        mockContext,
-        expect.objectContaining({
-          events: expect.objectContaining({
-            'https://schemas.openid.net/secevent/caep/event-type/session-revoked': expect.objectContaining({
-              event_timestamp: customTimestamp
-            })
-          })
-        })
-      );
-    });
-
     it('should handle addressSuffix with trailing slash correctly', async () => {
       const params = {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',

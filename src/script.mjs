@@ -1,5 +1,5 @@
+import { getAuthorizationHeader, getBaseURL, resolveJSONPathTemplates, signSET } from '@sgnl-actions/utils';
 import { transmitSET } from '@sgnl-ai/set-transmitter';
-import { resolveJSONPathTemplates, signSET, getBaseURL, getAuthorizationHeader } from '@sgnl-actions/utils';
 
 /**
  * Parse subject JSON string into the appropriate format
@@ -103,10 +103,10 @@ export default {
     // Parse the subject
     const subject = parseSubject(resolvedParams.subject);
 
-    // Ensure event_timestamp is set in the event payload
+    // Build event payload with current timestamp
     const eventPayload = {
       ...resolvedParams.eventPayload,
-      event_timestamp: resolvedParams.eventPayload.event_timestamp || Math.floor(Date.now() / 1000)
+      event_timestamp: Math.floor(Date.now() / 1000)
     };
 
     // Determine subject format (default to SubjectInSubId for CAEP 3.0)
