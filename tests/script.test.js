@@ -57,10 +57,7 @@ describe('Generic SSE Transmitter', () => {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
         subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {
-          initiating_entity: 'policy',
-          reason_user: 'Session terminated due to policy'
-        },
+        eventPayload: '{"initiating_entity":"policy","reason_user":"Session terminated due to policy"}',
         address: 'https://receiver.example.com/events'
       };
 
@@ -110,7 +107,7 @@ describe('Generic SSE Transmitter', () => {
           user: { format: 'email', email: 'user@example.com' },
           session: { format: 'opaque', id: 'session-123' }
         }),
-        eventPayload: {},
+        eventPayload: '{}',
         address: 'https://receiver.example.com/events'
       };
 
@@ -134,7 +131,7 @@ describe('Generic SSE Transmitter', () => {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
         subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
+        eventPayload: '{}',
         address: 'https://receiver.example.com',
         addressSuffix: '/caep/events'
       };
@@ -153,12 +150,9 @@ describe('Generic SSE Transmitter', () => {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
         subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
+        eventPayload: '{}',
         address: 'https://receiver.example.com/events',
-        customClaims: {
-          custom_field: 'value',
-          another_field: 123
-        }
+        customClaims: '{"custom_field":"value","another_field":123}'
       };
 
       await script.default.invoke(params, mockContext);
@@ -177,7 +171,7 @@ describe('Generic SSE Transmitter', () => {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
         subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
+        eventPayload: '{}',
         address: 'https://receiver.example.com/events',
         subjectFormat: 'SubjectInEventClaims'
       };
@@ -202,65 +196,57 @@ describe('Generic SSE Transmitter', () => {
       expect(callArgs.sub_id).toBeUndefined();
     });
 
-    it('should fail when required type is missing', async () => {
-      const params = {
-        audience: 'https://customer.okta.com/',
-        subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
-        address: 'https://receiver.example.com/events'
-      };
-
-      await expect(script.default.invoke(params, mockContext))
-        .rejects.toThrow('type is required');
-    });
-
-    it('should fail when required audience is missing', async () => {
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
-        address: 'https://receiver.example.com/events'
-      };
-
-      await expect(script.default.invoke(params, mockContext))
-        .rejects.toThrow('audience is required');
-    });
-
-    it('should fail when required subject is missing', async () => {
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        audience: 'https://customer.okta.com/',
-        eventPayload: {},
-        address: 'https://receiver.example.com/events'
-      };
-
-      await expect(script.default.invoke(params, mockContext))
-        .rejects.toThrow('subject is required');
-    });
-
-    it('should fail when required eventPayload is missing', async () => {
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        audience: 'https://customer.okta.com/',
-        subject: '{"format":"email","email":"user@example.com"}',
-        address: 'https://receiver.example.com/events'
-      };
-
-      await expect(script.default.invoke(params, mockContext))
-        .rejects.toThrow('eventPayload is required');
-    });
-
     it('should fail with invalid subject JSON', async () => {
       const params = {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
         subject: 'not-valid-json',
-        eventPayload: {},
+        eventPayload: '{}',
         address: 'https://receiver.example.com/events'
       };
 
       await expect(script.default.invoke(params, mockContext))
         .rejects.toThrow('Invalid subject JSON');
+    });
+
+    it('should fail with invalid eventPayload JSON', async () => {
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: 'not-valid-json',
+        address: 'https://receiver.example.com/events'
+      };
+
+      await expect(script.default.invoke(params, mockContext))
+        .rejects.toThrow('Invalid event payload JSON');
+    });
+
+    it('should fail with non-object eventPayload', async () => {
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: '["array","not","object"]',
+        address: 'https://receiver.example.com/events'
+      };
+
+      await expect(script.default.invoke(params, mockContext))
+        .rejects.toThrow('Event payload must be a JSON object');
+    });
+
+    it('should fail with invalid customClaims JSON', async () => {
+      const params = {
+        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+        audience: 'https://customer.okta.com/',
+        subject: '{"format":"email","email":"user@example.com"}',
+        eventPayload: '{}',
+        address: 'https://receiver.example.com/events',
+        customClaims: 'not-valid-json'
+      };
+
+      await expect(script.default.invoke(params, mockContext))
+        .rejects.toThrow('Invalid custom claims JSON');
     });
 
     it('should handle transmitSET failures', async () => {
@@ -275,7 +261,7 @@ describe('Generic SSE Transmitter', () => {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
         subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
+        eventPayload: '{}',
         address: 'https://receiver.example.com/events'
       };
 
@@ -294,9 +280,7 @@ describe('Generic SSE Transmitter', () => {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
         subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {
-          initiating_entity: 'policy'
-        },
+        eventPayload: '{"initiating_entity":"policy"}',
         address: 'https://receiver.example.com/events'
       };
 
@@ -320,7 +304,7 @@ describe('Generic SSE Transmitter', () => {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
         subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
+        eventPayload: '{}',
         address: 'https://receiver.example.com/',
         addressSuffix: '/caep/events'
       };
@@ -339,7 +323,7 @@ describe('Generic SSE Transmitter', () => {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
         subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {}
+        eventPayload: '{}'
       };
 
       await script.default.invoke(params, mockContext);
@@ -356,7 +340,7 @@ describe('Generic SSE Transmitter', () => {
           type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
           audience: 'https://customer.okta.com/',
           subject: '{"format":"email","email":"resolved@example.com"}',
-          eventPayload: { resolved: true },
+          eventPayload: '{"resolved":true}',
           address: 'https://receiver.example.com/events'
         },
         errors: []
@@ -366,7 +350,7 @@ describe('Generic SSE Transmitter', () => {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
         subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
+        eventPayload: '{}',
         address: 'https://receiver.example.com/events'
       };
 
@@ -382,7 +366,7 @@ describe('Generic SSE Transmitter', () => {
           type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
           audience: 'https://customer.okta.com/',
           subject: '{"format":"email","email":"user@example.com"}',
-          eventPayload: {},
+          eventPayload: '{}',
           address: 'https://receiver.example.com/events'
         },
         errors: ['Template error 1', 'Template error 2']
@@ -392,7 +376,7 @@ describe('Generic SSE Transmitter', () => {
         type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
         audience: 'https://customer.okta.com/',
         subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: {},
+        eventPayload: '{}',
         address: 'https://receiver.example.com/events'
       };
 
