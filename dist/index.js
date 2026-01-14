@@ -752,6 +752,40 @@ function parseSubject(subjectStr) {
 }
 
 /**
+ * Parse event payload JSON string
+ * @param {string} payloadStr - JSON string representing the event payload
+ * @returns {object} Parsed payload object
+ */
+function parseEventPayload(payloadStr) {
+  try {
+    const payload = JSON.parse(payloadStr);
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+      throw new Error('Event payload must be a JSON object');
+    }
+    return payload;
+  } catch (error) {
+    throw new Error(`Invalid event payload JSON: ${error.message}`);
+  }
+}
+
+/**
+ * Parse custom claims JSON string
+ * @param {string} claimsStr - JSON string representing custom claims
+ * @returns {object} Parsed claims object
+ */
+function parseCustomClaims(claimsStr) {
+  try {
+    const claims = JSON.parse(claimsStr);
+    if (typeof claims !== 'object' || claims === null || Array.isArray(claims)) {
+      throw new Error('Custom claims must be a JSON object');
+    }
+    return claims;
+  } catch (error) {
+    throw new Error(`Invalid custom claims JSON: ${error.message}`);
+  }
+}
+
+/**
  * Build the destination URL from address and optional suffix
  * @param {string} address - Base address
  * @param {string} [suffix] - Optional suffix to append
@@ -807,20 +841,6 @@ var script = {
    * @returns {Object} Transmission result with status, statusCode, body, and retryable flag
    */
   invoke: async (params, context) => {
-    // Validate required parameters
-    if (!params.type) {
-      throw new Error('type is required');
-    }
-    if (!params.audience) {
-      throw new Error('audience is required');
-    }
-    if (!params.subject) {
-      throw new Error('subject is required');
-    }
-    if (!params.eventPayload) {
-      throw new Error('eventPayload is required');
-    }
-
     const jobContext = context.data || {};
 
     // Resolve JSONPath templates in params
@@ -840,21 +860,33 @@ var script = {
     // Parse the subject
     const subject = parseSubject(resolvedParams.subject);
 
+    // Parse the event payload
+    const parsedEventPayload = parseEventPayload(resolvedParams.eventPayload);
+
     // Build event payload with current timestamp
     const eventPayload = {
-      ...resolvedParams.eventPayload,
-      event_timestamp: Math.floor(Date.now() / 1000)
+      ...parsedEventPayload,
+      event_timestamp: Math.floor(Date.now() / 1000),
     };
 
     // Determine subject format (default to SubjectInSubId for CAEP 3.0)
     const subjectFormat = resolvedParams.subjectFormat || 'SubjectInSubId';
 
-    // Build the SET payload
-    const setPayload = {
-      aud: resolvedParams.audience,
-      events: {
-        [resolvedParams.type]: eventPayload
-      }
+    // Start with custom claims (if provided), then override with required fields
+    const setPayload = {};
+
+    // Add custom claims first
+    if (resolvedParams.customClaims) {
+      const customClaims = parseCustomClaims(resolvedParams.customClaims);
+      Object.entries(customClaims).forEach(([key, value]) => {
+        setPayload[key] = value;
+      });
+    }
+
+    // Build the required SET structure (overrides any custom claims with same keys)
+    setPayload.aud = resolvedParams.audience;
+    setPayload.events = {
+      [resolvedParams.type]: eventPayload,
     };
 
     // Add subject based on format
@@ -866,22 +898,15 @@ var script = {
       setPayload.sub_id = subject;
     }
 
-    // Add custom claims if provided
-    if (resolvedParams.customClaims) {
-      Object.entries(resolvedParams.customClaims).forEach(([key, value]) => {
-        setPayload[key] = value;
-      });
-    }
-
     // Sign the SET
     const jwt = await signSET(context, setPayload);
 
     // Transmit the SET
     return await transmitSET(jwt, address, {
       headers: {
-        'Authorization': authHeader,
-        'User-Agent': 'SGNL-CAEP-Hub/2.0'
-      }
+        Authorization: authHeader,
+        'User-Agent': 'SGNL-CAEP-Hub/2.0',
+      },
     });
   },
 
@@ -892,10 +917,12 @@ var script = {
     const { error } = params;
 
     // Check if this is a retryable error
-    if (error.message?.includes('429') ||
-        error.message?.includes('502') ||
-        error.message?.includes('503') ||
-        error.message?.includes('504')) {
+    if (
+      error.message?.includes('429') ||
+      error.message?.includes('502') ||
+      error.message?.includes('503') ||
+      error.message?.includes('504')
+    ) {
       return { status: 'retry_requested' };
     }
 
@@ -908,7 +935,7 @@ var script = {
    */
   halt: async (_params, _context) => {
     return { status: 'halted' };
-  }
+  },
 };
 
 module.exports = script;
