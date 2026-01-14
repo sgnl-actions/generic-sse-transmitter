@@ -135,12 +135,21 @@ export default {
     // Determine subject format (default to SubjectInSubId for CAEP 3.0)
     const subjectFormat = resolvedParams.subjectFormat || 'SubjectInSubId';
 
-    // Build the SET payload
-    const setPayload = {
-      aud: resolvedParams.audience,
-      events: {
-        [resolvedParams.type]: eventPayload,
-      },
+    // Start with custom claims (if provided), then override with required fields
+    const setPayload = {};
+
+    // Add custom claims first
+    if (resolvedParams.customClaims) {
+      const customClaims = parseCustomClaims(resolvedParams.customClaims);
+      Object.entries(customClaims).forEach(([key, value]) => {
+        setPayload[key] = value;
+      });
+    }
+
+    // Build the required SET structure (overrides any custom claims with same keys)
+    setPayload.aud = resolvedParams.audience;
+    setPayload.events = {
+      [resolvedParams.type]: eventPayload,
     };
 
     // Add subject based on format
@@ -150,14 +159,6 @@ export default {
     } else {
       // Add subject as sub_id for CAEP 3.0
       setPayload.sub_id = subject;
-    }
-
-    // Add custom claims if provided
-    if (resolvedParams.customClaims) {
-      const customClaims = parseCustomClaims(resolvedParams.customClaims);
-      Object.entries(customClaims).forEach(([key, value]) => {
-        setPayload[key] = value;
-      });
     }
 
     // Sign the SET
