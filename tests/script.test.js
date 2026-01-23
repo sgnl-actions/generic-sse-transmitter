@@ -11,14 +11,13 @@ jest.unstable_mockModule('@sgnl-ai/set-transmitter', () => ({
 }));
 
 jest.unstable_mockModule('@sgnl-actions/utils', () => ({
-  resolveJSONPathTemplates: jest.fn((params) => ({ result: params, errors: [] })),
   signSET: jest.fn().mockResolvedValue('mock.jwt.token'),
   getBaseURL: jest.fn((params, context) => params.address || context.environment?.ADDRESS),
   getAuthorizationHeader: jest.fn().mockResolvedValue('Bearer test-token')
 }));
 
 const { transmitSET } = await import('@sgnl-ai/set-transmitter');
-const { resolveJSONPathTemplates, signSET, getBaseURL, getAuthorizationHeader } = await import('@sgnl-actions/utils');
+const { signSET, getBaseURL, getAuthorizationHeader } = await import('@sgnl-actions/utils');
 const script = await import('../src/script.mjs');
 
 describe('Generic SSE Transmitter', () => {
@@ -45,7 +44,6 @@ describe('Generic SSE Transmitter', () => {
       body: '{"accepted": true}',
       retryable: false
     });
-    resolveJSONPathTemplates.mockImplementation((params) => ({ result: params, errors: [] }));
     signSET.mockResolvedValue('mock.jwt.token');
     getBaseURL.mockImplementation((params, context) => params.address || context.environment?.ADDRESS);
     getAuthorizationHeader.mockResolvedValue('Bearer test-token');
@@ -332,58 +330,6 @@ describe('Generic SSE Transmitter', () => {
         params,
         mockContext
       );
-    });
-
-    it('should resolve JSONPath templates', async () => {
-      resolveJSONPathTemplates.mockReturnValueOnce({
-        result: {
-          type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-          audience: 'https://customer.okta.com/',
-          subject: '{"format":"email","email":"resolved@example.com"}',
-          eventPayload: '{"resolved":true}',
-          address: 'https://receiver.example.com/events'
-        },
-        errors: []
-      });
-
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        audience: 'https://customer.okta.com/',
-        subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: '{}',
-        address: 'https://receiver.example.com/events'
-      };
-
-      await script.default.invoke(params, mockContext);
-
-      expect(resolveJSONPathTemplates).toHaveBeenCalledWith(params, {});
-    });
-
-    it('should log template resolution errors', async () => {
-      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
-      resolveJSONPathTemplates.mockReturnValueOnce({
-        result: {
-          type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-          audience: 'https://customer.okta.com/',
-          subject: '{"format":"email","email":"user@example.com"}',
-          eventPayload: '{}',
-          address: 'https://receiver.example.com/events'
-        },
-        errors: ['Template error 1', 'Template error 2']
-      });
-
-      const params = {
-        type: 'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
-        audience: 'https://customer.okta.com/',
-        subject: '{"format":"email","email":"user@example.com"}',
-        eventPayload: '{}',
-        address: 'https://receiver.example.com/events'
-      };
-
-      await script.default.invoke(params, mockContext);
-
-      expect(consoleWarnSpy).toHaveBeenCalledWith('Template resolution errors:', ['Template error 1', 'Template error 2']);
-      consoleWarnSpy.mockRestore();
     });
   });
 
