@@ -1,4 +1,4 @@
-import { getAuthorizationHeader, getBaseURL, resolveJSONPathTemplates, signSET } from '@sgnl-actions/utils';
+import { getAuthorizationHeader, getBaseURL,  signSET } from '@sgnl-actions/utils';
 import { transmitSET } from '@sgnl-ai/set-transmitter';
 
 /**
@@ -104,27 +104,20 @@ export default {
    * @returns {Object} Transmission result with status, statusCode, body, and retryable flag
    */
   invoke: async (params, context) => {
-    const jobContext = context.data || {};
-
-    // Resolve JSONPath templates in params
-    const { result: resolvedParams, errors } = resolveJSONPathTemplates(params, jobContext);
-    if (errors.length > 0) {
-      console.warn('Template resolution errors:', errors);
-    }
 
     // Get the base address
-    const baseAddress = getBaseURL(resolvedParams, context);
+    const baseAddress = getBaseURL(params, context);
 
     // Build complete URL with optional suffix
-    const address = buildUrl(baseAddress, resolvedParams.addressSuffix);
+    const address = buildUrl(baseAddress, params.addressSuffix);
 
     const authHeader = await getAuthorizationHeader(context);
 
     // Parse the subject
-    const subject = parseSubject(resolvedParams.subject);
+    const subject = parseSubject(params.subject);
 
     // Parse the event payload
-    const parsedEventPayload = parseEventPayload(resolvedParams.eventPayload);
+    const parsedEventPayload = parseEventPayload(params.eventPayload);
 
     // Build event payload with current timestamp
     const eventPayload = {
@@ -133,29 +126,29 @@ export default {
     };
 
     // Determine subject format (default to SubjectInSubId for CAEP 3.0)
-    const subjectFormat = resolvedParams.subjectFormat || 'SubjectInSubId';
+    const subjectFormat = params.subjectFormat || 'SubjectInSubId';
 
     // Start with custom claims (if provided), then override with required fields
     const setPayload = {};
 
     // Add custom claims first
-    if (resolvedParams.customClaims) {
-      const customClaims = parseCustomClaims(resolvedParams.customClaims);
+    if (params.customClaims) {
+      const customClaims = parseCustomClaims(params.customClaims);
       Object.entries(customClaims).forEach(([key, value]) => {
         setPayload[key] = value;
       });
     }
 
     // Build the required SET structure (overrides any custom claims with same keys)
-    setPayload.aud = resolvedParams.audience;
+    setPayload.aud = params.audience;
     setPayload.events = {
-      [resolvedParams.type]: eventPayload,
+      [params.type]: eventPayload,
     };
 
     // Add subject based on format
     if (subjectFormat === 'SubjectInEventClaims') {
       // Add subject to event payload for CAEP 2.0 or Okta events
-      setPayload.events[resolvedParams.type].subject = subject;
+      setPayload.events[params.type].subject = subject;
     } else {
       // Add subject as sub_id for CAEP 3.0
       setPayload.sub_id = subject;
