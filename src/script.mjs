@@ -1,4 +1,4 @@
-import { getAuthorizationHeader, getBaseURL,  signSET } from '@sgnl-actions/utils';
+import { getAuthorizationHeader, getBaseURL,  signSET, SGNL_USER_AGENT } from '@sgnl-actions/utils';
 import { transmitSET } from '@sgnl-ai/set-transmitter';
 
 /**
@@ -161,7 +161,7 @@ export default {
     return await transmitSET(jwt, address, {
       headers: {
         Authorization: authHeader,
-        'User-Agent': 'SGNL-CAEP-Hub/2.0',
+        'User-Agent': SGNL_USER_AGENT,
       },
     });
   },
