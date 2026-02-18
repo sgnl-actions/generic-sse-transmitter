@@ -10,7 +10,7 @@ function parseSubject(subjectStr) {
   try {
     return JSON.parse(subjectStr);
   } catch (error) {
-    throw new Error(`Invalid subject JSON: ${error.message}`);
+    throw new Error(`Invalid subject JSON: ${error.message}`, { cause: error });
   }
 }
 
@@ -27,7 +27,7 @@ function parseEventPayload(payloadStr) {
     }
     return payload;
   } catch (error) {
-    throw new Error(`Invalid event payload JSON: ${error.message}`);
+    throw new Error(`Invalid event payload JSON: ${error.message}`, { cause: error });
   }
 }
 
@@ -44,7 +44,7 @@ function parseCustomClaims(claimsStr) {
     }
     return claims;
   } catch (error) {
-    throw new Error(`Invalid custom claims JSON: ${error.message}`);
+    throw new Error(`Invalid custom claims JSON: ${error.message}`, { cause: error });
   }
 }
 
@@ -122,7 +122,7 @@ export default {
     // Build event payload with current timestamp
     const eventPayload = {
       ...parsedEventPayload,
-      event_timestamp: Math.floor(Date.now() / 1000),
+      event_timestamp: Math.floor(Date.now() / 1000)
     };
 
     // Determine subject format (default to SubjectInSubId for CAEP 3.0)
@@ -142,7 +142,7 @@ export default {
     // Build the required SET structure (overrides any custom claims with same keys)
     setPayload.aud = params.audience;
     setPayload.events = {
-      [params.type]: eventPayload,
+      [params.type]: eventPayload
     };
 
     // Add subject based on format
@@ -161,8 +161,8 @@ export default {
     return await transmitSET(jwt, address, {
       headers: {
         Authorization: authHeader,
-        'User-Agent': SGNL_USER_AGENT,
-      },
+        'User-Agent': SGNL_USER_AGENT
+      }
     });
   },
 
@@ -191,5 +191,5 @@ export default {
    */
   halt: async (_params, _context) => {
     return { status: 'halted' };
-  },
+  }
 };
